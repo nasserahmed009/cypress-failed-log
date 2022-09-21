@@ -1,5 +1,5 @@
 /// <reference types="cypress" />
-// @ts-check
+// @ts-nocheck
 'use strict'
 
 const path = require('path')
@@ -17,7 +17,7 @@ const truncateFilename = s => Cypress._.truncate(s, {
   omission: ''
 })
 const getCleanFilename = s => truncateFilename(cleanupFilename(s))
-const getFilepath = filename => path.join('cypress', 'logs', filename)
+const getFilepath = (filename, flaky) => path.join('cypress', flaky ? 'flaky-logs' : 'logs', filename)
 const retriesTimes = getRetriesTimes()
 
 function getRetriesTimes () {
@@ -34,6 +34,7 @@ function getRetriesTimes () {
 }
 
 const failedCaseTable = {}
+const flakyTestsTable = {}
 
 function writeFailedTestInfo ({
   specName,
@@ -42,7 +43,7 @@ function writeFailedTestInfo ({
   testName,
   testError,
   testCommands
-}) {
+}, flaky = false) {
   const info = {
     specName,
     title,
@@ -58,7 +59,7 @@ function writeFailedTestInfo ({
       testName
     ], '-'))
   const filename = `failed-${cleaned}.json`
-  const filepath = getFilepath(filename)
+  const filepath = getFilepath(filename, flaky)
   cy
     .writeFile(filepath, str)
     .log(`saved failed test information to ${filename}`)
@@ -117,10 +118,12 @@ function initLog () {
 
 function onFailed () {
   savingCommands = false
-  if (this.currentTest.state === 'passed') {
+  const testName = this.currentTest.fullTitle()
+
+  // If the test passed on first attempt
+  if (this.currentTest.state === 'passed' && !failedCaseTable[testName]) {
     return
   }
-  const testName = this.currentTest.fullTitle()
 
   // remember the test case retry times
   if (failedCaseTable[testName]) {
@@ -166,6 +169,21 @@ function onFailed () {
     testName,
     testError,
     testCommands
+  }
+
+  // If the test passed after a previously failed attempt, it's considered flaky 
+  if(this.currentTest.state === 'passed' && failedCaseTable[testName]){
+
+    if(!flakyTestsTable[testName]) {
+      // Report
+      const filepath = writeFailedTestInfo(info, true)
+      debug('saving the FLAKY log file %s', filepath)
+      info.filepath = filepath
+      flakyTestsTable[testName] = true
+    }
+
+    cy.task('failed', info, { log: false })
+    return
   }
 
   // If finally retry still failed or we didn't set the retry value in cypress.json
